@@ -1,7 +1,8 @@
 import os
 import csv
 
-from data import df
+from torch import OutOfMemoryError
+
 #from trend import df_increasing as df
 
 import numpy as np
@@ -21,24 +22,40 @@ from neuralforecast.utils import AirPassengersDF
 from matplotlib.patches import Rectangle
 
 from metric import mse, mae
-
+    
+from data import create_uniform_data
+df = create_uniform_data(data_size=1024, spacing=100)
 # normalize
 MEAN, STD = df["y"].mean(), df["y"].std()
 df["y"] = (df["y"] - MEAN) / STD
 
 def forecast(input_size, h):
     
+    global df
+
     model_names = []
     models = [
-            #NHITS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            NHITS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             #DilatedRNN(input_size=input_size, h=h, max_steps=2000),
-            #NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            #DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            #TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            LSTM(input_size=input_size, h=h, max_steps=2000),
+            NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            #LSTM(input_size=input_size, h=h, max_steps=2),
             ]
-    model_names.extend(["LSTM"]) #"NHITS", "DilatedRNN", "DLinear", "LSTM"])  
+    model_names.extend(["NHITS", "NBEATS", "DLinear", "TiDE"]) #"DilatedRNN", "DLinear", "LSTM"])  
+    
+    skip = True
+    for m in model_names:
+        fname = "results_lookahead_%s/%d_%s_%s_%s.png" % (m, h, os.environ["START"], os.environ["STEP"], os.environ["LAMBDA"])
+        if not os.path.exists(fname):
+            skip = False
+            break
+    
+    if skip:
+        print ("Skipping %s" % fname)
+        return
 
+    # OOM based (#TODO: request GPU)
     #if h < 1024:
     #    models.extend([
     #                TSMixer(input_size=input_size, h=h, n_series=1, max_steps=2000),
@@ -52,28 +69,33 @@ def forecast(input_size, h):
     nf = NeuralForecast(models = models, freq = "M")
     
     if h > df["y"].shape[0]:
-        new_df = np.zeros((h,))
-        pad = h - df["y"].shape[0]
-        new_df[:df["y"].shape[0]] = df["y"]
-        new_df[df["y"].shape[0]:] = df["y"][:pad]
-        df["y"] = new_df
+        df = create_uniform_data(data_size=h, spacing=100)
+        # normalize
+        MEAN, STD = df["y"].mean(), df["y"].std()
+        df["y"] = (df["y"] - MEAN) / STD
 
     print ("Training %d horizon for " % h, model_names)
     
 #    if all([os.path.exists("results_lookahead_%s/%d_%s_%s_%s.png" % (m, h, os.environ["START"], os.environ["STEP"], os.environ["LAMBDA"])) for m in model_names]):
 #        return
-
-    nf.fit(df=df)
-    y_hat_forecast = nf.predict()
+    
+    oom = False
+    try:
+        nf.fit(df=df)
+        y_hat_forecast = nf.predict()
+    except OutOfMemoryError:
+        oom = True
 
     for model_name in model_names:
-        
-        if os.path.exists("results_lookahead_%s/%d_%s_%s_%s.png" % (model_name, h, os.environ["START"], os.environ["STEP"], os.environ["LAMBDA"])):
-            continue
 
         print ("Training %d horizon for %s" % (h, model_name))
+        
+        if oom:
+            try:
+                y_pred = y_hat_forecast[model_name]
+            except Exception:
+                continue
 
-        y_pred = y_hat_forecast[model_name]
         y_gt = df["y"][:y_pred.shape[0]]
         
         if y_pred.shape[0] > y_gt.shape[0]:
