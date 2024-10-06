@@ -1,7 +1,6 @@
 import os
 import csv
 
-from data import df
 #from trend import df_increasing as df
 
 import numpy as np
@@ -21,7 +20,9 @@ from neuralforecast.utils import AirPassengersDF
 from matplotlib.patches import Rectangle
 
 from metric import mse, mae
-
+    
+from data import create_uniform_data
+df = create_uniform_data(data_size=1024, spacing=100)
 # normalize
 MEAN, STD = df["y"].mean(), df["y"].std()
 df["y"] = (df["y"] - MEAN) / STD
@@ -30,15 +31,16 @@ def forecast(input_size, h):
     
     model_names = []
     models = [
-            #NHITS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            NHITS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             #DilatedRNN(input_size=input_size, h=h, max_steps=2000),
-            #NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            #DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            #TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            LSTM(input_size=input_size, h=h, max_steps=2000),
+            NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            #LSTM(input_size=input_size, h=h, max_steps=2),
             ]
-    model_names.extend(["LSTM"]) #"NHITS", "DilatedRNN", "DLinear", "LSTM"])  
+    model_names.extend(["NHITS", "NBEATS", "DLinear", "TiDE"]) #"DilatedRNN", "DLinear", "LSTM"])  
 
+    # OOM based (#TODO: request GPU)
     #if h < 1024:
     #    models.extend([
     #                TSMixer(input_size=input_size, h=h, n_series=1, max_steps=2000),
@@ -101,7 +103,7 @@ def forecast(input_size, h):
 
 if __name__ == "__main__":
     
-    sz = 1024
-    while sz <= 1536:
+    sz = 128
+    while sz <= 896:
         forecast(sz, sz)
         sz += 128
