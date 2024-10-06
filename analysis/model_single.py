@@ -85,6 +85,7 @@ def forecast(input_size, h):
         y_hat_forecast = nf.predict()
     except OutOfMemoryError:
         oom = True
+        y_hat_forecast = nf.predict()
 
     for model_name in model_names:
 
