@@ -33,7 +33,7 @@ def forecast(input_size, h):
             NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            LSTM(input_size=input_size, h=h, max_steps=2000),
+            LSTM(input_size=input_size, h=h, max_steps=2),
             ]
     model_names.extend(["NHITS", "DilatedRNN", "NBEATS", "DLinear", "TiDE", "LSTM"])  
 
