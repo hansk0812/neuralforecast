@@ -1,4 +1,4 @@
-START=0 STEP=0 LAMBDA=0 python model_single.py # model without pred self-supervision
+START=1 STEP=1 LAMBDA=0.5 python model_single.py # model without pred self-supervision
 initial=0.05
 inc=0.01
 end=1

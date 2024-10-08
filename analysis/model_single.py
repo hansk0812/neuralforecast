@@ -1,7 +1,7 @@
 import os
 import csv
 
-from torch import OutOfMemoryError
+from traceback import print_exc
 
 #from trend import df_increasing as df
 
@@ -39,10 +39,10 @@ def forecast(input_size, h):
             #DilatedRNN(input_size=input_size, h=h, max_steps=2000),
             NBEATS(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             DLinear(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
-            TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
+            #TiDE(input_size=input_size, h=h, max_steps=2000, start_padding_enabled=True),
             #LSTM(input_size=input_size, h=h, max_steps=2),
             ]
-    model_names.extend(["NHITS", "NBEATS", "DLinear", "TiDE"]) #"DilatedRNN", "DLinear", "LSTM"])  
+    model_names.extend(["NHITS", "NBEATS", "DLinear"]) #, "TiDE"]) #"DilatedRNN", "DLinear", "LSTM"])  
     
     skip = True
     for m in model_names:
@@ -79,24 +79,14 @@ def forecast(input_size, h):
 #    if all([os.path.exists("results_lookahead_%s/%d_%s_%s_%s.png" % (m, h, os.environ["START"], os.environ["STEP"], os.environ["LAMBDA"])) for m in model_names]):
 #        return
     
-    oom = False
-    try:
-        nf.fit(df=df)
-        y_hat_forecast = nf.predict()
-    except OutOfMemoryError:
-        oom = True
-        y_hat_forecast = nf.predict()
+    nf.fit(df=df)
+    y_hat_forecast = nf.predict()
 
     for model_name in model_names:
-
+        
+        y_pred = y_hat_forecast[model_name]
         print ("Training %d horizon for %s" % (h, model_name))
         
-        if oom:
-            try:
-                y_pred = y_hat_forecast[model_name]
-            except Exception:
-                continue
-
         y_gt = df["y"][:y_pred.shape[0]]
         
         if y_pred.shape[0] > y_gt.shape[0]:
