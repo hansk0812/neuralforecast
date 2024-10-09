@@ -24,8 +24,8 @@ from metric import mse, mae
 #from data import create_uniform_data
 from trend import create_trend_data
 df = create_trend_data(data_size=1024, spacing=100, trend_type="decreasing")
-df["y"].plot()
-plt.show()
+#df["y"].plot()
+#plt.show()
 # normalize
 MEAN, STD = df["y"].mean(), df["y"].std()
 df["y"] = (df["y"] - MEAN) / STD
