@@ -1,4 +1,22 @@
+import torch
+import numpy as np
+import random
 import os
+from pytorch_lightning import seed_everything
+# https://wandb.ai/sauravmaheshkar/RSNA-MICCAI/reports/How-to-Set-Random-Seeds-in-PyTorch-and-Tensorflow--VmlldzoxMDA2MDQy
+np.random.seed(seed=1)
+random.seed(1)
+torch.use_deterministic_algorithms(True, warn_only=True)
+torch.manual_seed(1)
+torch.cuda.manual_seed(1)
+# When running on the CuDNN backend, two further options must be set
+torch.backends.cudnn.deterministic = True
+#torch.backends.cudnn.benchmark = False
+# Set a fixed value for the hash seed
+os.environ["PYTHONHASHSEED"] = str(1)
+seed_everything(1, workers=True)
+
+import csv
 
 from matplotlib import pyplot as plt
 
@@ -10,7 +28,6 @@ from datasetsforecast.long_horizon import ETTh1, ETTh2, ETTm1, ETTm2, \
 from neuralforecast.models import NHITS
 from neuralforecast import NeuralForecast
 
-import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
@@ -90,12 +107,13 @@ for idx, (group, meta) in enumerate(LongHorizonInfo):
     msk = np.random.rand(len(data)) < 0.8
     train_data, test_data = data[msk], data[~msk]
     
-    checkpoint_callback = ModelCheckpoint(dirpath="checkpoints", save_top_k=2, monitor="valid_loss", filename="nhits-{epoch:02d}-{val_loss:.2f}")
+    checkpoint_callback = ModelCheckpoint(dirpath="checkpoints", save_top_k=2, monitor="valid_loss", filename="nhits-{epoch:02d}-{valid_loss:.3f}")
     models = [
-            NHITS(input_size=h, h=h, max_steps=200, start_padding_enabled=True, default_root_dir = "checkpoints", enable_checkpointing=True, callbacks = [checkpoint_callback])
+            NHITS(input_size=h, h=h, max_steps=500, start_padding_enabled=True, default_root_dir = "checkpoints", 
+                    enable_checkpointing=True, callbacks = [checkpoint_callback], random_seed=1)
              ]
     model_name = "NHITS"
-
+    
     if not args.model_path is None:
         model = NHITS.load_from_checkpoint(args.model_path)
         models[0] = model
@@ -126,6 +144,9 @@ for idx, (group, meta) in enumerate(LongHorizonInfo):
         mae.append(np.abs(np.array(test_horizon_insample["y"][h:]) - np.array(y_hat_forecast["NHITS"])).mean())
         #plt.show()
         #plt.cla(); plt.clf();
-
+    
+    with open("NHITS_ETTh1.csv", 'a') as f:
+        writer = csv.writer(f, delimiter=',')
+        writer.writerow([os.environ["START"], os.environ["STEP"], float(np.array(mae).mean())])
     print ("START=%s STEP=%s Test set MAE = %.7f" % (os.environ["START"], os.environ["STEP"], np.array(mae).mean()))
     exit()
