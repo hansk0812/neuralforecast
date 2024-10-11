@@ -1,10 +1,11 @@
-START=1 STEP=1 LAMBDA=0.5 python sota_ettm2.py  # model without pred self-supervision
-
 donemodels=`tail -n 1 sota.csv`
 if [[ "$donemodels" = "" ]]; then
   initial=0.4
   inc=0.03
   star=0.9
+  
+  START=1 STEP=1 LAMBDA=0.5 python sota_ettm2.py  # model without pred self-supervision
+
   for s in $(LC_ALL=en_US.UTF-8 seq $initial $inc $star); 
   do
     initial2=0.05
