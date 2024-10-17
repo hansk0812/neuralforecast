@@ -3,11 +3,14 @@
 # %% auto 0
 __all__ = ['BaseWindows']
 
+import os
+
 # %% ../../nbs/common.base_windows.ipynb 5
 import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from ._base_model import BaseModel
 from ._scalers import TemporalNorm
@@ -419,6 +422,48 @@ class BaseWindows(BaseModel):
 
         # Model Predictions
         output = self(windows_batch)
+         
+#        for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+#            window_size = insample_y.shape[1]
+#            time_idx = int(window_size * fraction)
+#            insample_y_new = torch.zeros_like(insample_y)
+#            insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+#            insample_y_new[:,(window_size-time_idx):] = output[:,:time_idx]
+#
+#            windows_batch = dict(
+#                insample_y=insample_y_new,  # [Ws, L]
+#                insample_mask=insample_mask,  # [Ws, L]
+#                futr_exog=futr_exog,  # [Ws, L + h, F]
+#                hist_exog=hist_exog,  # [Ws, L, X]
+#                stat_exog=stat_exog,
+#            )  # [Ws, S]
+#
+#            output_pred = self(windows_batch)
+#            
+#            p1 = float(os.environ["LAMBDA"])
+#            output[:,time_idx:] = (1-p1) * output[:,time_idx:] + p1 * output_pred[:,:window_size-time_idx]
+
+        for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+            window_size = insample_y.shape[1]
+            target_size = outsample_y.shape[1]
+            time_idx = int(target_size * fraction)
+            insample_y_new = torch.zeros_like(insample_y)
+            insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+            insample_y_new[:,(window_size-time_idx):] = output[:,:time_idx]
+
+            windows_batch = dict(
+                insample_y=insample_y_new,  # [Ws, L]
+                insample_mask=insample_mask,  # [Ws, L]
+                futr_exog=futr_exog,  # [Ws, L + h, F]
+                hist_exog=hist_exog,  # [Ws, L, X]
+                stat_exog=stat_exog,
+            )  # [Ws, S]
+
+            output_pred = self(windows_batch)
+
+            p1 = float(os.environ["LAMBDA"])
+            output[:,time_idx:] = (1-p1) * output[:,time_idx:] + p1 * output_pred[:,:target_size-time_idx]
+
         if self.loss.is_distribution_output:
             _, y_loc, y_scale = self._inv_normalization(
                 y_hat=outsample_y, temporal_cols=batch["temporal_cols"], y_idx=y_idx
@@ -514,7 +559,7 @@ class BaseWindows(BaseModel):
             (
                 insample_y,
                 insample_mask,
-                _,
+                outsample_y,
                 outsample_mask,
                 hist_exog,
                 futr_exog,
@@ -531,6 +576,48 @@ class BaseWindows(BaseModel):
 
             # Model Predictions
             output_batch = self(windows_batch)
+            
+#            for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+#                window_size = insample_y.shape[1]
+#                time_idx = int(window_size * fraction)
+#                insample_y_new = torch.zeros_like(insample_y)
+#                insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+#                insample_y_new[:,(window_size-time_idx):] = output_batch[:,:time_idx]
+#
+#                windows_batch = dict(
+#                    insample_y=insample_y_new,  # [Ws, L]
+#                    insample_mask=insample_mask,  # [Ws, L]
+#                    futr_exog=futr_exog,  # [Ws, L + h, F]
+#                    hist_exog=hist_exog,  # [Ws, L, X]
+#                    stat_exog=stat_exog,
+#                )  # [Ws, S]
+#
+#                output_pred = self(windows_batch)
+#                
+#                p1 = float(os.environ["LAMBDA"])
+#                output_batch[:,time_idx:] = (1-p1) * output_batch[:,time_idx:] + p1 * output_pred[:,:window_size-time_idx]
+
+            for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+                window_size = insample_y.shape[1]
+                target_size = outsample_y.shape[1]
+                time_idx = int(target_size * fraction)
+                insample_y_new = torch.zeros_like(insample_y)
+                insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+                insample_y_new[:,(window_size-time_idx):] = output_batch[:,:time_idx]
+
+                windows_batch = dict(
+                    insample_y=insample_y_new,  # [Ws, L]
+                    insample_mask=insample_mask,  # [Ws, L]
+                    futr_exog=futr_exog,  # [Ws, L + h, F]
+                    hist_exog=hist_exog,  # [Ws, L, X]
+                    stat_exog=stat_exog,
+                )  # [Ws, S]
+
+                output_pred = self(windows_batch)
+
+                p1 = float(os.environ["LAMBDA"])
+                output_batch[:,time_idx:] = (1-p1) * output_batch[:,time_idx:] + p1 * output_pred[:,:target_size-time_idx]
+
             valid_loss_batch = self._compute_valid_loss(
                 outsample_y=original_outsample_y,
                 output=output_batch,
@@ -582,7 +669,7 @@ class BaseWindows(BaseModel):
             windows = self._normalization(windows=windows, y_idx=y_idx)
 
             # Parse windows
-            insample_y, insample_mask, _, _, hist_exog, futr_exog, stat_exog = (
+            insample_y, insample_mask, outsample_y, outsample_mask, hist_exog, futr_exog, stat_exog = (
                 self._parse_windows(batch, windows)
             )
 
@@ -596,6 +683,58 @@ class BaseWindows(BaseModel):
 
             # Model Predictions
             output_batch = self(windows_batch)
+          
+#            for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+#                window_size = insample_y.shape[1]
+#                time_idx = int(window_size * fraction)
+#                insample_y_new = torch.zeros_like(insample_y)
+#                insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+#                insample_y_new[:,(window_size-time_idx):] = output_batch[:,:time_idx]
+#
+#                windows_batch = dict(
+#                    insample_y=insample_y_new,  # [Ws, L]
+#                    insample_mask=insample_mask,  # [Ws, L]
+#                    futr_exog=futr_exog,  # [Ws, L + h, F]
+#                    hist_exog=hist_exog,  # [Ws, L, X]
+#                    stat_exog=stat_exog,
+#                )  # [Ws, S]
+#
+#                output_pred = self(windows_batch)
+#                
+#                p1 = float(os.environ["LAMBDA"])
+#                output_batch[:,time_idx:] = (1-p1) * output_batch[:,time_idx:] + p1 * output_pred[:,:window_size-time_idx]
+
+            for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+                window_size = insample_y.shape[1]
+                target_size = outsample_y.shape[1]
+                time_idx = int(target_size * fraction)
+                insample_y_new = torch.zeros_like(insample_y)
+                insample_y_new[:,:(window_size - time_idx)] = insample_y[:,time_idx:]
+                insample_y_new[:,(window_size-time_idx):] = output_batch[:,:time_idx]
+
+                windows_batch = dict(
+                    insample_y=insample_y_new,  # [Ws, L]
+                    insample_mask=insample_mask,  # [Ws, L]
+                    futr_exog=futr_exog,  # [Ws, L + h, F]
+                    hist_exog=hist_exog,  # [Ws, L, X]
+                    stat_exog=stat_exog,
+                )  # [Ws, S]
+
+                output_pred = self(windows_batch)
+
+                p1 = float(os.environ["LAMBDA"])
+                output_batch[:,time_idx:] = (1-p1) * output_batch[:,time_idx:] + p1 * output_pred[:,:target_size-time_idx]
+
+            valid_loss_batch = self._compute_valid_loss(
+                outsample_y=original_outsample_y,
+                output=output_batch,
+                outsample_mask=outsample_mask,
+                temporal_cols=batch["temporal_cols"],
+                y_idx=batch["y_idx"],
+            )
+            valid_losses.append(valid_loss_batch)
+            batch_sizes.append(len(output_batch))
+
             # Inverse normalization and sampling
             if self.loss.is_distribution_output:
                 _, y_loc, y_scale = self._inv_normalization(
@@ -736,6 +875,7 @@ class BaseWindows(BaseModel):
             valid_batch_size=self.valid_batch_size,
             **data_module_kwargs,
         )
+        
         trainer = pl.Trainer(**self.trainer_kwargs)
         fcsts = trainer.predict(self, datamodule=datamodule)
         self.decompose_forecast = False  # Default decomposition back to false
