@@ -83,6 +83,7 @@ class BaseModel(pl.LightningModule):
         early_stop_patience_steps,
         **trainer_kwargs,
     ):
+        self.save_hyperparameters(logger=False)
         super().__init__()
         with warnings.catch_warnings(record=False):
             warnings.filterwarnings("ignore")
@@ -265,6 +266,7 @@ class BaseModel(pl.LightningModule):
             for arg in ("devices", "num_nodes"):
                 trainer_kwargs.pop(arg, None)
             trainer = pl.Trainer(
+                default_root_dir="./",
                 strategy="ddp",
                 use_distributed_sampler=False,  # to ensure our dataloaders are used as-is
                 num_nodes=num_tasks,
