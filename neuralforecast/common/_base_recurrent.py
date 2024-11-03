@@ -3,12 +3,16 @@
 # %% auto 0
 __all__ = ['BaseRecurrent']
 
+import os
+
 # %% ../../nbs/common.base_recurrent.ipynb 6
 import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 import neuralforecast.losses.pytorch as losses
+
+torch.autograd.set_detect_anomaly(True)
 
 from ._base_model import BaseModel
 from ._scalers import TemporalNorm
@@ -171,7 +175,8 @@ class BaseRecurrent(BaseModel):
         y_hat = self.scaler.inverse_transform(z=y_hat, x_scale=y_scale, x_shift=y_loc)
 
         return y_hat, y_loc, y_scale
-
+    
+    # returns [B,C,132,13]
     def _create_windows(self, batch, step):
         temporal = batch["temporal"]
         temporal_cols = batch["temporal_cols"]
@@ -215,7 +220,12 @@ class BaseRecurrent(BaseModel):
 
         # Parse batch
         window_size = 1 + self.h  # 1 for current t and h for future
+
+        #print (type(temporal), temporal.shape)
+        # [2, 4, 144]
         windows = temporal.unfold(dimension=-1, size=window_size, step=1)
+        #print ('after unfold', temporal.shape)
+        #[2, 4, 144]
 
         # Truncated backprogatation/inference (shorten sequence where RNNs unroll)
         n_windows = windows.shape[2]
@@ -236,12 +246,14 @@ class BaseRecurrent(BaseModel):
             windows = windows[:, :, -cutoff:, :]
 
         # [B, C, input_size, 1+H]
+        #print (windows.shape); exit()
+        #[2, 4, 132, 13]
         windows_batch = dict(
             temporal=windows,
             temporal_cols=temporal_cols,
             static=batch.get("static", None),
             static_cols=batch.get("static_cols", None),
-        )
+            )
 
         return windows_batch
 
@@ -250,6 +262,9 @@ class BaseRecurrent(BaseModel):
         # Filter insample lags from outsample horizon
         mask_idx = batch["temporal_cols"].get_loc("available_mask")
         y_idx = batch["y_idx"]
+
+        #print ('windows["temporal"]', windows["temporal"].shape); exit()
+        #torch.Size([2, 4, 132, 13])
         insample_y = windows["temporal"][:, y_idx, :, : -self.h]
         insample_mask = windows["temporal"][:, mask_idx, :, : -self.h]
         outsample_y = windows["temporal"][:, y_idx, :, -self.h :].contiguous()
@@ -280,7 +295,11 @@ class BaseRecurrent(BaseModel):
             stat_exog = windows["static"][:, static_idx]
         else:
             stat_exog = None
+        
+        #print (insample_y.shape); exit()
+        # [2, 132, 12]
 
+        # [2, 4, 132, 13]
         return (
             insample_y,
             insample_mask,
@@ -298,7 +317,7 @@ class BaseRecurrent(BaseModel):
         )
         windows = self._create_windows(batch, step="train")
 
-        # Parse windows
+        # Parse windows: [B,C,SeqLen,H+1] --> [B,[y_idx],SeqLen,1] insample_y and [B,[y_idx],SeqLen,12] outsample_y
         (
             insample_y,
             insample_mask,
@@ -308,7 +327,7 @@ class BaseRecurrent(BaseModel):
             futr_exog,
             stat_exog,
         ) = self._parse_windows(batch, windows)
-
+        
         windows_batch = dict(
             insample_y=insample_y,  # [B, seq_len, 1]
             insample_mask=insample_mask,  # [B, seq_len, 1]
@@ -316,9 +335,19 @@ class BaseRecurrent(BaseModel):
             hist_exog=hist_exog,  # [B, C, seq_len]
             stat_exog=stat_exog,
         )  # [B, S]
-
+        
         # Model predictions
         output = self(windows_batch)  # tuple([B, seq_len, H, output])
+
+        #print (output.shape); exit()
+        # [2, 132, 12]
+
+        # mean and std for normal dist based on default args
+        #[torch.Size([2, 132, 12]), torch.Size([2, 132, 12])]
+        
+        #print (outsample_y.shape, insample_y.shape)
+        #torch.Size([2, 132, 12]), torch.Size([2, 132, 1])
+
         if self.loss.is_distribution_output:
             outsample_y, y_loc, y_scale = self._inv_normalization(
                 y_hat=outsample_y,
@@ -328,16 +357,129 @@ class BaseRecurrent(BaseModel):
             B = output[0].size()[0]
             T = output[0].size()[1]
             H = output[0].size()[2]
+
+            #print ('output', [x.shape for x in output])
+            #output [torch.Size([2, 132, 12]), torch.Size([2, 132, 12])]
+            
             output = [arg.view(-1, *(arg.size()[2:])) for arg in output]
+            
+            #print ('output', [x.shape for x in output])
+            #output [torch.Size([264, 12]), torch.Size([264, 12])]
+
             outsample_y = outsample_y.view(B * T, H)
             outsample_mask = outsample_mask.view(B * T, H)
             y_loc = y_loc.repeat_interleave(repeats=T, dim=0).squeeze(-1)
             y_scale = y_scale.repeat_interleave(repeats=T, dim=0).squeeze(-1)
+            
             distr_args = self.loss.scale_decouple(
                 output=output, loc=y_loc, scale=y_scale
             )
+            
+            # scale_decouple: unnormalize wrt y_loc, y_scale (GT unnormalization params)
+            
+            _, mu, _ = self.loss.sample(distr_args)
+            
+            #[2*132, 12, 1] - mean and std, [264, 12, 5] - (median, lo-80, lo-90, hi-80, hi-90) - [80,90] input
+            #print (mu.shape, quantiles.shape)
+            
+            insample_y_new = torch.zeros_like(insample_y)
+            for window in range(0, T, H*2):
+                for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+                    
+                    if window+2*H > T:
+                        window_size = (T-window)//2
+                        target_size = (T-window)//2
+                    else:
+                        window_size = H
+                        target_size = H
+                    
+                    time_idx = int(target_size * fraction)
+                    
+                    #print (insample_y_new.shape); exit()
+                    # (2,132,1)
+
+                    insample_y_new[:,window:window + window_size - time_idx,:] = \
+                            insample_y[:,window + time_idx: window + window_size,:]
+
+                    #print ([x.reshape((B, -1, H)).shape for x in output]); exit()
+                    # (2,132,12)
+                    insample_y_new[:,window+window_size-time_idx:window+window_size,0] = \
+                            output[:,window+window_size-time_idx:window+window_size,window+window_size-1]
+                    
+                    # for every 2*H, upper triangular matrix to average the results per row
+                    windows_batch = dict(
+                        insample_y=insample_y_new,  # [Ws, L]
+                        insample_mask=insample_mask,  # [Ws, L]
+                        futr_exog=futr_exog,  # [Ws, L + h, F]
+                        hist_exog=hist_exog,  # [Ws, L, X]
+                        stat_exog=stat_exog,
+                    )  # [Ws, S]
+
+                    output_pred = self(windows_batch)
+
+                    p1 = float(os.environ["LAMBDA"])
+                    output = list(output)
+                    output[0] = output[0].reshape((B,-1,H))
+                    output_pred = list(output_pred)
+                    output_pred[0] = output_pred[0].reshape((B,-1,H))
+
+                    output[0][:,window+time_idx:window+target_size,:] = \
+                            (1-p1) * output[0][:,window+time_idx:window+target_size,:] + \
+                            p1 * output_pred[0][:,window:window+target_size-time_idx,:]
+
+            #print ([x.shape for x in distr_args]); exit()
+            #(132*2,12), (132*2,12)
+            
+            distr_args = self.loss.scale_decouple(
+                output=output, loc=y_loc, scale=y_scale)
+ 
             loss = self.loss(y=outsample_y, distr_args=distr_args, mask=outsample_mask)
         else:
+            
+            insample_y_new = torch.zeros_like(insample_y)
+            B,T,_ = insample_y.shape
+            H = output.shape[-1]
+
+            for window in range(0, T, H*2):
+                for fraction in torch.arange(float(os.environ["START"]), 1, float(os.environ["STEP"])):
+                    
+                    if window+2*H > T:
+                        window_size = (T-window)//2
+                        target_size = (T-window)//2
+                    else:
+                        window_size = H
+                        target_size = H
+                    
+                    time_idx = int(target_size * fraction)
+                    
+                    #print (insample_y_new.shape); exit()
+                    # (2,132,1)
+
+                    insample_y_new[:,window:window + window_size - time_idx,:] = \
+                            insample_y[:,window + time_idx: window + window_size,:]
+
+                    #print ([x.reshape((B, -1, H)).shape for x in output]); exit()
+                    # (2,132,12)
+                    insample_y_new[:,window+window_size-time_idx:window+window_size,0] = \
+                            output[:,window+window_size-time_idx:window+window_size,window_size-1]
+                    
+                    # for every 2*H, upper triangular matrix to average the results per row
+                    windows_batch = dict(
+                        insample_y=insample_y_new,  # [Ws, L]
+                        insample_mask=insample_mask,  # [Ws, L]
+                        futr_exog=futr_exog,  # [Ws, L + h, F]
+                        hist_exog=hist_exog,  # [Ws, L, X]
+                        stat_exog=stat_exog,
+                    )  # [Ws, S]
+
+                    output_pred = self(windows_batch)
+
+                    p1 = float(os.environ["LAMBDA"])
+
+                    output[:,window+time_idx:window+target_size,:] = \
+                            (1-p1) * output[:,window+time_idx:window+target_size,:] + \
+                            p1 * output_pred[:,window:window+target_size-time_idx,:]
+
             loss = self.loss(y=outsample_y, y_hat=output, mask=outsample_mask)
 
         if torch.isnan(loss):
@@ -412,7 +554,7 @@ class BaseRecurrent(BaseModel):
                 output=output, loc=y_loc, scale=y_scale
             )
             _, sample_mean, quants = self.loss.sample(distr_args=distr_args)
-
+            
             if str(type(self.valid_loss)) in [
                 "<class 'neuralforecast.losses.pytorch.sCRPS'>",
                 "<class 'neuralforecast.losses.pytorch.MQLoss'>",
@@ -476,6 +618,10 @@ class BaseRecurrent(BaseModel):
 
         # Model Predictions
         output = self(windows_batch)  # tuple([B, seq_len, H], ...)
+        
+        # [[2,132,12], [2,132,12]]
+        #print ([x.shape for x in output])
+
         if self.loss.is_distribution_output:
             _, y_loc, y_scale = self._inv_normalization(
                 y_hat=output[0], temporal_cols=batch["temporal_cols"], y_idx=y_idx
@@ -490,9 +636,15 @@ class BaseRecurrent(BaseModel):
                 output=output, loc=y_loc, scale=y_scale
             )
             _, sample_mean, quants = self.loss.sample(distr_args=distr_args)
+            
+            #print (sample_mean.shape, quants.shape); exit()
+            # [2*132, 12, 1], [2*132, 12, 5]
             y_hat = torch.concat((sample_mean, quants), axis=2)
             y_hat = y_hat.view(B, T, H, -1)
-
+            
+            #print (y_hat.shape); exit()
+            #[2, 132, 12, 6]
+            
             if self.loss.return_params:
                 distr_args = torch.stack(distr_args, dim=-1)
                 distr_args = torch.reshape(distr_args, (B, T, H, -1))
